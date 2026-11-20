@@ -7,9 +7,29 @@ const app=express();
 const {DATABASE_URL,ADMIN_PASSWORD,SESSION_SECRET}=process.env;
 if(!DATABASE_URL||!ADMIN_PASSWORD||!SESSION_SECRET||ADMIN_PASSWORD.length<12||SESSION_SECRET.length<24){console.error('Set DATABASE_URL, ADMIN_PASSWORD (12+ chars), SESSION_SECRET (24+ chars).');process.exit(1)}
 const pool=new Pool({connectionString:DATABASE_URL,ssl:process.env.DB_SSL==='true'?{rejectUnauthorized:true}:false});
+// Log slow PostgreSQL operations (query text and parameters are intentionally omitted).
+const rawQuery=pool.query.bind(pool);
+pool.query=async (...args)=>{
+ const start=process.hrtime.bigint();
+ try{return await rawQuery(...args)}finally{
+  const ms=Number(process.hrtime.bigint()-start)/1e6;
+  if(ms>=150)console.log(`[DB_SLOW] duration_ms=${ms.toFixed(1)}`);
+ }
+};
 app.disable('x-powered-by');
 app.set('trust proxy',1);
 app.use(express.json({limit:'4mb'}));
+// Measure real write latency in Render Logs without exposing request bodies or secrets.
+app.use('/api',(req,res,next)=>{
+ if(!['POST','PUT','PATCH','DELETE'].includes(req.method))return next();
+ const start=process.hrtime.bigint();
+ res.once('finish',()=>{
+  const ms=Number(process.hrtime.bigint()-start)/1e6;
+  const route=req.route?.path||req.path.replace(/\/\d+(?=\/|$)/g,'/:id').replace(/\/\d{4}-\d{2}-\d{2}(?=\/|$)/g,'/:date');
+  console.log(`[WRITE] ${req.method} ${route} status=${res.statusCode} total_ms=${ms.toFixed(1)} sse_clients=${liveClients.size}`);
+ });
+ next();
+});
 app.use((req,res,next)=>{if(['POST','PUT','PATCH','DELETE'].includes(req.method)){const origin=req.headers.origin;if(origin){try{if(new URL(origin).host!==req.get('host'))return res.status(403).json({error:'허용되지 않은 요청입니다.'})}catch{return res.status(403).json({error:'허용되지 않은 요청입니다.'})}}}next()});
 app.use((req,res,next)=>{res.setHeader('X-Content-Type-Options','nosniff');res.setHeader('Referrer-Policy','strict-origin-when-cross-origin');res.setHeader('X-Frame-Options','DENY');res.setHeader('Content-Security-Policy',"default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'");next()});
 const sessions=new Map();const failures=new Map();
