@@ -39,3 +39,12 @@
 ## 로컬 실행
 
 Node.js 20+ 및 PostgreSQL 필요. `.env.example`을 참고해 환경변수를 설정한 다음 `npm install && npm start`로 실행하세요. 서버는 `http://localhost:3000`에서 열립니다.
+
+
+## 월간 일정표 업데이트 (2026-11)
+- 홈 화면은 기존 주간 일정 그대로 유지합니다.
+- 상단 일정표 탭은 월간 달력으로 변경되었습니다. 이전 달/다음 달/이번 달 이동을 지원합니다.
+- 달력의 날짜를 누르면 일반 방문자는 일정 내용을 보고, 관리자는 해당 날짜의 일정을 추가/수정할 수 있습니다.
+- 관리자 일정 삭제는 달력에서 날짜를 선택한 후 아래 삭제 버튼을 이용합니다.
+- 주간/월간 모두 기존 `weekly_schedule` 데이터와 `/api/schedule/:date` API를 사용하며 DB 스키마 변경은 없습니다.
+- GitHub에서는 `public/index.html`, `public/app.js`, `public/style.css`만 교체하면 됩니다. `server.js`는 변경하지 않았습니다.
