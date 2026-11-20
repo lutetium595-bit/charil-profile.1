@@ -32,7 +32,9 @@ app.use('/api',(req,res,next)=>{
 });
 app.use((req,res,next)=>{if(['POST','PUT','PATCH','DELETE'].includes(req.method)){const origin=req.headers.origin;if(origin){try{if(new URL(origin).host!==req.get('host'))return res.status(403).json({error:'허용되지 않은 요청입니다.'})}catch{return res.status(403).json({error:'허용되지 않은 요청입니다.'})}}}next()});
 app.use((req,res,next)=>{res.setHeader('X-Content-Type-Options','nosniff');res.setHeader('Referrer-Policy','strict-origin-when-cross-origin');res.setHeader('X-Frame-Options','DENY');res.setHeader('Content-Security-Policy',"default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'");next()});
-const sessions=new Map();const failures=new Map();
+const failures=new Map();
+const SESSION_DAYS=30;
+const SESSION_MS=SESSION_DAYS*24*60*60*1000;
 
 // Notify connected browsers after a successful database write.
 const liveClients=new Set();
@@ -49,8 +51,16 @@ app.get('/api/events',(req,res)=>{
 
 function cookie(req){return Object.fromEntries((req.headers.cookie||'').split(';').map(x=>x.trim().split('=').map(decodeURIComponent)).filter(x=>x.length===2))}
 function tokenHash(v){return crypto.createHmac('sha256',SESSION_SECRET).update(v).digest('hex')}
-function current(req){const t=cookie(req).charil_session;if(!t)return null;const s=sessions.get(tokenHash(t));if(!s||s.expires<Date.now()){if(s)sessions.delete(tokenHash(t));return null}return s}
-function auth(req,res,next){if(!current(req))return res.status(401).json({error:'관리자 로그인이 필요합니다.'});next()}
+async function current(req){
+ const t=cookie(req).charil_session;
+ if(!t||!/^[a-f0-9]{64}$/.test(t))return null;
+ const r=await pool.query('SELECT expires_at FROM admin_sessions WHERE token_hash=$1 AND expires_at>now()',[tokenHash(t)]);
+ return r.rows[0]||null;
+}
+async function auth(req,res,next){
+ try{if(!await current(req))return res.status(401).json({error:'관리자 로그인이 필요합니다.'});next()}
+ catch(e){next(e)}
+}
 function secureCompare(a,b){const ah=crypto.createHash('sha256').update(a).digest();const bh=crypto.createHash('sha256').update(b).digest();return crypto.timingSafeEqual(ah,bh)}
 function err(res,e){console.error(e);res.status(500).json({error:'서버 처리 중 오류가 발생했습니다.'})}
 const defaultProfile={name:'챠릴',subtitle:'Charil',birthday:'',firstBroadcast:'',mbti:'',fixedTime:'',broadcastDays:'',likes:'',photo:'/assets/profile-sample.webp'};
@@ -58,12 +68,31 @@ async function init(){
  await pool.query(`CREATE TABLE IF NOT EXISTS site_profile (id INTEGER PRIMARY KEY DEFAULT 1 CHECK(id=1), data JSONB NOT NULL)`);
  await pool.query(`CREATE TABLE IF NOT EXISTS weekly_schedule (date DATE PRIMARY KEY, category TEXT NOT NULL, title TEXT NOT NULL, time_text TEXT NOT NULL, detail TEXT NOT NULL DEFAULT '')`);
  await pool.query(`CREATE TABLE IF NOT EXISTS site_entries (id BIGSERIAL PRIMARY KEY, section TEXT NOT NULL CHECK(section IN ('notice','outfit','reputation')), title TEXT NOT NULL, body TEXT NOT NULL DEFAULT '', image TEXT NOT NULL DEFAULT '', created_at TIMESTAMPTZ NOT NULL DEFAULT now())`);
+ await pool.query('CREATE TABLE IF NOT EXISTS admin_sessions (token_hash TEXT PRIMARY KEY, expires_at TIMESTAMPTZ NOT NULL)');
+ await pool.query('CREATE INDEX IF NOT EXISTS admin_sessions_expiry_idx ON admin_sessions(expires_at)');
  await pool.query('INSERT INTO site_profile (id,data) VALUES (1,$1) ON CONFLICT(id) DO NOTHING',[JSON.stringify(defaultProfile)]);
 }
-app.get('/api/state',async(req,res)=>{try{const [p,s,e]=await Promise.all([pool.query('SELECT data FROM site_profile WHERE id=1'),pool.query("SELECT to_char(date,'YYYY-MM-DD') AS date,category,title,time_text AS time,detail FROM weekly_schedule ORDER BY date"),pool.query('SELECT id::text,section,title,body,image,created_at FROM site_entries ORDER BY created_at DESC,id DESC')]);res.setHeader('Cache-Control','no-store');res.json({profile:p.rows[0]?.data||defaultProfile,schedule:s.rows,entries:e.rows,admin:!!current(req)})}catch(e){err(res,e)}});
-app.get('/api/session',(req,res)=>res.json({admin:!!current(req)}));
-app.post('/api/login',(req,res)=>{const ip=req.ip;const record=failures.get(ip)||{n:0,until:0};if(record.until>Date.now())return res.status(429).json({error:'잠시 후 다시 시도해 주세요.'});if(typeof req.body.password!=='string'||!secureCompare(req.body.password,ADMIN_PASSWORD)){record.n++;if(record.n>=8){record.until=Date.now()+15*60*1000;record.n=0}failures.set(ip,record);return res.status(401).json({error:'비밀번호가 올바르지 않습니다.'})}failures.delete(ip);const t=crypto.randomBytes(32).toString('hex');sessions.set(tokenHash(t),{expires:Date.now()+12*3600*1000});res.cookie('charil_session',t,{httpOnly:true,secure:process.env.NODE_ENV==='production',sameSite:'strict',path:'/',maxAge:12*3600*1000});res.json({ok:true})});
-app.post('/api/logout',auth,(req,res)=>{const t=cookie(req).charil_session;if(t)sessions.delete(tokenHash(t));res.clearCookie('charil_session',{path:'/'});res.json({ok:true})});
+app.get('/api/state',async(req,res)=>{try{const [p,s,e,session]=await Promise.all([pool.query('SELECT data FROM site_profile WHERE id=1'),pool.query("SELECT to_char(date,'YYYY-MM-DD') AS date,category,title,time_text AS time,detail FROM weekly_schedule ORDER BY date"),pool.query('SELECT id::text,section,title,body,image,created_at FROM site_entries ORDER BY created_at DESC,id DESC'),current(req)]);res.setHeader('Cache-Control','no-store');res.json({profile:p.rows[0]?.data||defaultProfile,schedule:s.rows,entries:e.rows,admin:!!session})}catch(e){err(res,e)}});
+app.get('/api/session',async(req,res)=>{try{res.setHeader('Cache-Control','no-store');res.json({admin:!!(await current(req))})}catch(e){err(res,e)}});
+app.post('/api/login',async(req,res)=>{try{
+ const ip=req.ip;const record=failures.get(ip)||{n:0,until:0};
+ if(record.until>Date.now())return res.status(429).json({error:'잠시 후 다시 시도해 주세요.'});
+ if(typeof req.body?.password!=='string'||!secureCompare(req.body.password,ADMIN_PASSWORD)){
+  record.n++;if(record.n>=8){record.until=Date.now()+15*60*1000;record.n=0}failures.set(ip,record);
+  return res.status(401).json({error:'비밀번호가 올바르지 않습니다.'});
+ }
+ failures.delete(ip);
+ const t=crypto.randomBytes(32).toString('hex');
+ await pool.query('INSERT INTO admin_sessions(token_hash,expires_at) VALUES($1,now()+interval \'30 days\')',[tokenHash(t)]);
+ res.cookie('charil_session',t,{httpOnly:true,secure:req.secure||process.env.NODE_ENV==='production',sameSite:'strict',path:'/',maxAge:SESSION_MS});
+ res.setHeader('Cache-Control','no-store');res.json({ok:true});
+}catch(e){err(res,e)}});
+app.post('/api/logout',auth,async(req,res)=>{try{
+ const t=cookie(req).charil_session;
+ if(t)await pool.query('DELETE FROM admin_sessions WHERE token_hash=$1',[tokenHash(t)]);
+ res.clearCookie('charil_session',{path:'/',sameSite:'strict',secure:req.secure||process.env.NODE_ENV==='production'});
+ res.setHeader('Cache-Control','no-store');res.json({ok:true});
+}catch(e){err(res,e)}});
 function str(x,max=200){return typeof x==='string'?x.trim().slice(0,max):''}
 function imageVal(x){const s=str(x,3500000);if(!s||s==='/assets/profile-sample.webp')return s;if(/^data:image\/(png|jpeg|webp|gif);base64,[A-Za-z0-9+/=]+$/.test(s)&&s.length<3500000)return s;throw new Error('지원하지 않는 이미지 형식입니다.')}
 app.put('/api/profile',auth,async(req,res)=>{try{const b=req.body||{};const p={name:str(b.name,40),subtitle:str(b.subtitle,80),birthday:str(b.birthday,80),firstBroadcast:str(b.firstBroadcast,100),mbti:str(b.mbti,50),fixedTime:str(b.fixedTime,80),broadcastDays:str(b.broadcastDays,140),likes:str(b.likes,300),photo:imageVal(b.photo)};await pool.query('UPDATE site_profile SET data=$1 WHERE id=1',[JSON.stringify(p)]);notifyUpdate({kind:'profile',profile:p});res.json({profile:p})}catch(e){res.status(400).json({error:e.message})}});
