@@ -120,6 +120,26 @@ function repValidate(b){const name=str(b.name,100),viewerId=str(b.viewerId,100),
 app.post('/api/reputation',auth,async(req,res)=>{try{const b=repValidate(req.body||{});if(!b)return res.status(400).json({error:'입력값을 확인해 주세요.'});const r=await pool.query('INSERT INTO reputation_records(name,viewer_id,description,count,image) VALUES($1,$2,$3,$4,$5) RETURNING id::text',[b.name,b.viewerId,b.description,b.count,b.image]);notifyUpdate({kind:'reputation'});res.json({id:r.rows[0].id})}catch(e){err(res,e)}});
 app.put('/api/reputation/:id',auth,async(req,res)=>{try{if(!/^\d+$/.test(req.params.id))return res.status(400).json({error:'잘못된 ID'});const b=repValidate(req.body||{});if(!b)return res.status(400).json({error:'입력값을 확인해 주세요.'});const r=await pool.query('UPDATE reputation_records SET name=$1,viewer_id=$2,description=$3,count=$4,image=$5 WHERE id=$6 RETURNING id',[b.name,b.viewerId,b.description,b.count,b.image,req.params.id]);if(!r.rowCount)return res.status(404).json({error:'항목이 없습니다.'});notifyUpdate({kind:'reputation'});res.json({ok:true})}catch(e){err(res,e)}});
 app.delete('/api/reputation/:id',auth,async(req,res)=>{try{if(!/^\d+$/.test(req.params.id))return res.status(400).json({error:'잘못된 ID'});const r=await pool.query('DELETE FROM reputation_records WHERE id=$1 RETURNING id',[req.params.id]);if(!r.rowCount)return res.status(404).json({error:'항목이 없습니다.'});notifyUpdate({kind:'reputation'});res.json({ok:true})}catch(e){err(res,e)}});
+// Merge a viewer's historical records atomically into one editable record.
+app.put('/api/reputation/group/merge',auth,async(req,res)=>{
+  const ids=req.body?.recordIds;
+  if(!Array.isArray(ids)||!ids.length||ids.length>1000||new Set(ids.map(String)).size!==ids.length||ids.some(id=>!/^[0-9]+$/.test(String(id))))return res.status(400).json({error:'업보 기록을 확인해 주세요.'});
+  const b=repValidate(req.body||{});
+  if(!b||!b.description.trim())return res.status(400).json({error:'업보 내용을 입력해 주세요.'});
+  const client=await pool.connect();
+  try{
+    await client.query('BEGIN');
+    const records=await client.query(repSelect+' WHERE id::text = ANY($1::text[]) FOR UPDATE',[ids.map(String)]);
+    if(records.rows.length!==ids.length)throw Object.assign(new Error('기록이 변경되었습니다. 새로고침 후 다시 시도해 주세요.'),{status:409});
+    const keys=new Set(records.rows.map(repViewer));
+    if(keys.size!==1)throw Object.assign(new Error('서로 다른 시청자의 기록은 합칠 수 없습니다.'),{status:400});
+    const keep=records.rows[0];
+    await client.query('UPDATE reputation_records SET name=$1,viewer_id=$2,description=$3,count=$4,image=$5 WHERE id=$6',[b.name,b.viewerId,b.description,b.count,b.image,keep.id]);
+    const removed=records.rows.filter(r=>r.id!==keep.id).map(r=>r.id);
+    if(removed.length)await client.query('DELETE FROM reputation_records WHERE id::text = ANY($1::text[])',[removed]);
+    await client.query('COMMIT');notifyUpdate({kind:'reputation'});res.json({ok:true});
+  }catch(e){await client.query('ROLLBACK');if(e.status)return res.status(e.status).json({error:e.message});err(res,e)}finally{client.release()}
+});
 app.put('/api/reputation/progress/save',auth,async(req,res)=>{try{const b=req.body||{},viewerKey=str(b.viewerKey,250),prizeKey=str(b.prizeKey,300),completed=Number(b.completed),publicNote=str(b.publicNote,3000),privateNote=str(b.privateNote,3000);if(!viewerKey||!prizeKey||!Number.isSafeInteger(completed)||completed<0)return res.status(400).json({error:'진행 정보를 확인해 주세요.'});const rows=await pool.query(repSelect);let total=0;for(const r of rows.rows){if(repViewer(r)!==viewerKey)continue;for(const prize of repParse(r))if(repKey(prize.label)===prizeKey)total+=prize.qty}if(!total||completed>total)return res.status(400).json({error:'완료 수량이 전체 수량보다 많거나 업보가 없습니다.'});await pool.query(`INSERT INTO reputation_progress(viewer_key,prize_key,completed,public_note,private_note) VALUES($1,$2,$3,$4,$5) ON CONFLICT(viewer_key,prize_key) DO UPDATE SET completed=EXCLUDED.completed,public_note=EXCLUDED.public_note,private_note=EXCLUDED.private_note`,[viewerKey,prizeKey,completed,publicNote,privateNote]);notifyUpdate({kind:'reputation'});res.json({ok:true})}catch(e){err(res,e)}});
 
 app.use(express.static(path.join(__dirname,'public'),{index:'index.html'}));

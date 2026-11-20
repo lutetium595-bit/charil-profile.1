@@ -14,16 +14,18 @@ function node(tag,cls,content){const e=document.createElement(tag);if(cls)e.clas
 function render(){const root=$('#reputationList');if(!root)return;root.replaceChildren();const all=groups();let total=0,done=0;for(const g of all){const s=status(g);total+=s.total;done+=s.done}$('#repViewers').textContent=all.length+'명';$('#repTotal').textContent=total+'개';$('#repDone').textContent=done+'개';const shown=all.filter(g=>(!query||(g.name+' '+g.viewerId).toLocaleLowerCase().includes(query))&&visiblePrizes(g).length>0);if(!shown.length){root.append(node('p','empty-message',loaded?'조건에 맞는 업보가 없어요.':'업보를 불러오는 중이에요.'));return}
 for(const g of shown){const s=status(g),card=node('article','rep-card');const identity=node('div','rep-identity');const avatar=node('div','rep-avatar');if(g.image){const im=node('img');im.src=g.image;im.alt='';avatar.append(im)}else avatar.textContent='✦';identity.append(avatar);const names=node('div','rep-names');names.append(node('h3','',g.name),node('small','',g.viewerId?'@'+g.viewerId:'아이디 미등록'));identity.append(names);card.append(identity);const content=node('div','rep-content');const tags=node('div','rep-prizes');for(const p of visiblePrizes(g)){const pr=progress.find(x=>x.viewer_key===g.key&&x.prize_key===p.key),n=Math.min(p.qty,Number(pr?.completed)||0);const tag=node('button','rep-prize'+(p.qty>0&&n>=p.qty?' complete':''));tag.type='button';tag.append(node('span','',p.label),node('b','',`× ${p.qty}`));tag.onclick=()=>openPrize(g,p);tags.append(tag)}content.append(tags);if(state.admin){const actions=node('div','rep-actions');const edit=node('button','small-action','수정');edit.onclick=()=>editGroup(g);const del=node('button','small-action danger','삭제');del.onclick=()=>deleteGroup(g);actions.append(edit,del);content.append(actions)}card.append(content);root.append(card)}}
 function editGroup(g){
-  if(g.records.length===1){editRecord(g.records[0]);return}
-  modal('업보 수정 · '+g.name,'<div id="repGroupRecords" class="rep-group-records"></div>');
-  const list=$('#repGroupRecords');
-  for(const record of g.records){
-    const line=node('div','rep-group-record');
-    const summary=node('span','',parse(record).map(p=>p.label+' × '+p.qty).join(', '));
-    const button=node('button','small-action','수정');
-    button.type='button';button.onclick=()=>editRecord(record);
-    line.append(summary,button);list.append(line);
-  }
+  if(!state.admin)return;
+  const description=[...g.prizes.values()].map(p=>p.label+'*'+p.qty).join('\n');
+  modal('업보 수정 · '+g.name,`<form id="repGroupForm"><label class="field">시청자 닉네임<input id="repGroupName" maxlength="100" required></label><label class="field">시청자 아이디 (선택)<input id="repGroupViewerId" maxlength="100"></label><label class="field">업보 내용 (한 줄에 하나씩, 예: 손편지*4)<textarea id="repGroupDescription" maxlength="10000" rows="10" required></textarea></label><p class="hint">업보를 추가하거나 수량을 바꾸고, 필요 없는 항목은 해당 줄을 지우세요. 완료 수량과 메모는 같은 업보 이름이면 유지됩니다.</p><label class="field">시청자 이미지 (선택)<input id="repGroupImage" type="file" accept="image/png,image/jpeg,image/webp,image/gif"></label><p class="hint">이미지를 선택하지 않으면 기존 이미지를 유지합니다.</p><div class="modal-actions"><button class="primary" type="submit">전체 저장</button></div></form>`);
+  $('#repGroupName').value=g.name;
+  $('#repGroupViewerId').value=g.viewerId||'';
+  $('#repGroupDescription').value=description;
+  const form=$('#repGroupForm');
+  form.onsubmit=async e=>{e.preventDefault();const button=form.querySelector('[type="submit"]');button.disabled=true;
+    try{const file=$('#repGroupImage').files[0];const body={recordIds:g.records.map(r=>String(r.id)),name:$('#repGroupName').value,viewerId:$('#repGroupViewerId').value,description:$('#repGroupDescription').value,count:1,image:file?await fileToData(file):g.image||''};
+      await api('/api/reputation/group/merge',{method:'PUT',body:JSON.stringify(body)});closeModal();await load();showToast('업보 전체를 저장했어요.');
+    }catch(x){showToast('저장 실패: '+x.message)}finally{button.disabled=false}
+  };
 }
 async function deleteGroup(g){
   const message=g.records.length===1?'이 업보 기록을 삭제할까요?':g.name+'님의 업보 기록 '+g.records.length+'건을 모두 삭제할까요?\n이 작업은 되돌릴 수 없습니다.';
