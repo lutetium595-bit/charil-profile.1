@@ -9,3 +9,9 @@
 
 /* 의상목록 서브탭 및 원본 비율 이미지 */
 .outfit-tabs{display:flex;gap:10px;margin:0 0 24px;flex-wrap:wrap}.outfit-tab{border:1px solid #b9d4f7;background:#fff;color:#16458b;border-radius:22px;padding:11px 26px;font-weight:800;box-shadow:0 4px 12px #3a6eb012}.outfit-tab.active{background:#ffdf66;border-color:#f1cc48}.outfit-tab:hover{filter:brightness(.97)}#outfitList .entry-card img{width:100%;height:auto;max-height:none;object-fit:contain;display:block;border-radius:13px}
+
+/* 의상/헤어: 동일한 550 × 880 비율의 이미지 영역, 원본 전체 표시 */
+#outfitList.entry-grid{grid-template-columns:repeat(auto-fit,minmax(0,min(100%,550px)));justify-content:center;align-items:start}
+#outfitList .entry-card{min-width:0}
+#outfitList .entry-card img{display:block;width:100%;height:auto;aspect-ratio:550 / 880;object-fit:contain;object-position:center;background:#eaf5ff;border-radius:13px;margin-bottom:10px}
+@media(max-width:760px){#outfitList.entry-grid{grid-template-columns:minmax(0,1fr)}}
