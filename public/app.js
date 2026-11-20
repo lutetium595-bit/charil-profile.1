@@ -8,7 +8,23 @@ function dateKey(d){return `${d.getFullYear()}-${String(d.getMonth()+1).padStart
 function dateShort(d){return `${d.getMonth()+1}.${String(d.getDate()).padStart(2,'0')}`}
 function showToast(message){const t=$('#toast');t.textContent=message;t.style.display='block';clearTimeout(showToast.t);showToast.t=setTimeout(()=>t.style.display='none',3500)}
 async function api(url,opts={}){const r=await fetch(url,{credentials:'same-origin',headers:{'Content-Type':'application/json'},...opts});let j={};try{j=await r.json()}catch{}if(!r.ok)throw new Error(j.error||'요청에 실패했습니다.');return j}
-async function refresh(){const data=await api('/api/state');Object.assign(state,data);document.body.classList.toggle('is-admin',state.admin);render()}
+let refreshInFlight=null;
+async function refresh(){
+ if(refreshInFlight)return refreshInFlight;
+ refreshInFlight=(async()=>{const data=await api('/api/state',{cache:'no-store'});Object.assign(state,data);document.body.classList.toggle('is-admin',state.admin);render()})();
+ try{await refreshInFlight}finally{refreshInFlight=null}
+}
+let updateTimer;
+function scheduleRefresh(){clearTimeout(updateTimer);updateTimer=setTimeout(()=>refresh().catch(e=>console.warn('자동 갱신 실패:',e)),150)}
+// SSE: updates arrive as soon as an admin saves. Polling covers reconnects and multi-instance hosting.
+if(typeof EventSource!=='undefined'){
+ const live=new EventSource('/api/events');
+ live.addEventListener('update',scheduleRefresh);
+ live.addEventListener('open',scheduleRefresh);
+}
+setInterval(()=>{if(!document.hidden)scheduleRefresh()},15000);
+document.addEventListener('visibilitychange',()=>{if(!document.hidden)scheduleRefresh()});
+
 function render(){renderProfile();renderWeek();renderMonth();renderEntries()}
 function renderProfile(){const p=state.profile;$('#profileName').textContent=p.name||'챠릴';$('#profileSubtitle').textContent=p.subtitle||'Charil';$('#portrait').src=p.photo||'/assets/profile-sample.webp';for(const el of document.querySelectorAll('[data-profile]'))el.textContent=p[el.dataset.profile]||''}
 function scheduleFor(d){return state.schedule.find(s=>s.date===dateKey(d))}
