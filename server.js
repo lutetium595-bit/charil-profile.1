@@ -114,7 +114,7 @@ function repKey(v){return String(v||'').trim().replace(/\s+/g,' ').toLocaleLower
 function repViewer(r){return r.viewer_id?.trim()?'id:'+r.viewer_id.trim().toLocaleLowerCase():'name:'+repKey(r.name)}
 function repParse(r){const raw=String(r.description||'').trim();if(!raw)return [{label:'업보 미등록',qty:Math.max(0,r.count)}];const chunks=raw.split(/[,，\n]+/).map(s=>s.trim()).filter(Boolean);if(chunks.length===1&&!/[＊*]\s*\d+\s*$/.test(raw))return [{label:raw,qty:r.count}];return chunks.map(chunk=>{const m=chunk.match(/^(.*?)[＊*]\s*(\d+)\s*$/);return m&&m[1].trim()?{label:m[1].trim(),qty:Number(m[2])}:{label:chunk,qty:1}})}
 const repSelect='SELECT id::text,name,viewer_id,description,count,image,created_at FROM reputation_records';
-app.get('/api/reputation',async(req,res)=>{try{const [items,progress]=await Promise.all([pool.query(repSelect+' ORDER BY created_at DESC,id DESC'),pool.query('SELECT viewer_key,prize_key,completed,public_note FROM reputation_progress')]);res.setHeader('Cache-Control','no-store');res.json({items:items.rows,progress:progress.rows})}catch(e){err(res,e)}});
+app.get('/api/reputation',async(req,res)=>{try{const [items,progress]=await Promise.all([pool.query(repSelect+' ORDER BY created_at ASC,id ASC'),pool.query('SELECT viewer_key,prize_key,completed,public_note FROM reputation_progress')]);res.setHeader('Cache-Control','no-store');res.json({items:items.rows,progress:progress.rows})}catch(e){err(res,e)}});
 app.get('/api/reputation/private',auth,async(req,res)=>{try{const r=await pool.query('SELECT viewer_key,prize_key,private_note FROM reputation_progress');res.setHeader('Cache-Control','no-store');res.json({notes:r.rows})}catch(e){err(res,e)}});
 function repValidate(b){const name=str(b.name,100),viewerId=str(b.viewerId,100),description=str(b.description,10000),count=Number(b.count),image=imageVal(b.image);if(!name||!Number.isSafeInteger(count)||count<0||count>999999)return null;return {name,viewerId,description,count,image}}
 app.post('/api/reputation',auth,async(req,res)=>{try{const b=repValidate(req.body||{});if(!b)return res.status(400).json({error:'입력값을 확인해 주세요.'});const r=await pool.query('INSERT INTO reputation_records(name,viewer_id,description,count,image) VALUES($1,$2,$3,$4,$5) RETURNING id::text',[b.name,b.viewerId,b.description,b.count,b.image]);notifyUpdate({kind:'reputation'});res.json({id:r.rows[0].id})}catch(e){err(res,e)}});
@@ -129,7 +129,7 @@ app.put('/api/reputation/group/merge',auth,async(req,res)=>{
   const client=await pool.connect();
   try{
     await client.query('BEGIN');
-    const records=await client.query(repSelect+' WHERE id::text = ANY($1::text[]) FOR UPDATE',[ids.map(String)]);
+    const records=await client.query(repSelect+' WHERE id::text = ANY($1::text[]) ORDER BY created_at ASC,id ASC FOR UPDATE',[ids.map(String)]);
     if(records.rows.length!==ids.length)throw Object.assign(new Error('기록이 변경되었습니다. 새로고침 후 다시 시도해 주세요.'),{status:409});
     const keys=new Set(records.rows.map(repViewer));
     if(keys.size!==1)throw Object.assign(new Error('서로 다른 시청자의 기록은 합칠 수 없습니다.'),{status:400});
