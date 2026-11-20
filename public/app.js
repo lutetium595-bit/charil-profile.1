@@ -78,7 +78,7 @@ function render(){renderProfile();renderWeek();renderMonth();renderEntries()}
 function renderProfile(){const p=state.profile;$('#profileName').textContent=p.name||'챠릴';$('#profileSubtitle').textContent=p.subtitle||'Charil';const defaultPhoto='/assets/profile-sample.webp';const photo=p.photo||defaultPhoto;if($('#portrait').getAttribute('src')!==photo)$('#portrait').src=photo;$('#portrait').closest('.portrait-panel').classList.toggle('default-portrait',photo===defaultPhoto);for(const el of document.querySelectorAll('[data-profile]'))el.textContent=p[el.dataset.profile]||''}
 function scheduleFor(d){return state.schedule.find(s=>s.date===dateKey(d))}
 function weekRow(d,i){const s=scheduleFor(d);const row=document.createElement('div');row.className='week-row'+(i===6?' sunday':'')+(!s?' empty':'');const day=document.createElement('span');day.className='day';day.textContent=weekdays[i];const date=document.createElement('span');date.className='date';date.textContent=dateShort(d);const title=document.createElement('span');title.className='activity';title.textContent=s?`${icon(s.category)} ${s.title||s.category}`:'—';const time=document.createElement('span');time.className='time';time.textContent=s?.time||'';row.append(day,date,title,time);row.title=s?.detail||'';return row}
-function icon(cat){return {방송:'◉',게임:'♧',소통:'▤',휴방:'☕',기타:'☆'}[cat]||'☆'}
+function icon(cat){return {방송:'',게임:'',소통:'',휴방:'',기타:''}[cat]||'☆'}
 function renderWeek(){const a=state.week,b=addDays(a,6);$('#weekLabel').textContent=`${dateShort(a)} ~ ${dateShort(b)}`;const home=$('#homeWeek');home.replaceChildren();for(let i=0;i<7;i++){const d=addDays(a,i),s=scheduleFor(d);home.append(weekRow(d,i));}}
 function renderMonth(){
  const m=state.month,year=m.getFullYear(),month=m.getMonth();
