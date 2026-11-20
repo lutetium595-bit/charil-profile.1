@@ -7,11 +7,5 @@
 /* 기본 프로필 사진: 장식 없는 단색 하늘색 */
 .portrait-panel.default-portrait .portrait-star,.portrait-panel.default-portrait .portrait-sign{display:none}
 
-/* 의상목록: 이미지 원본 비율 유지 및 잘림 방지 */
-#outfitList .entry-card img {
-  width: 100%;
-  height: auto;
-  max-width: 100%;
-  object-fit: contain;
-  display: block;
-}
+/* 의상목록 서브탭 및 원본 비율 이미지 */
+.outfit-tabs{display:flex;gap:10px;margin:0 0 24px;flex-wrap:wrap}.outfit-tab{border:1px solid #b9d4f7;background:#fff;color:#16458b;border-radius:22px;padding:11px 26px;font-weight:800;box-shadow:0 4px 12px #3a6eb012}.outfit-tab.active{background:#ffdf66;border-color:#f1cc48}.outfit-tab:hover{filter:brightness(.97)}#outfitList .entry-card img{width:100%;height:auto;max-height:none;object-fit:contain;display:block;border-radius:13px}
