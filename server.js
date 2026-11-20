@@ -66,6 +66,8 @@ function err(res,e){console.error(e);res.status(500).json({error:'서버 처리 
 const defaultProfile={name:'챠릴',subtitle:'Charil',birthday:'',firstBroadcast:'',mbti:'',fixedTime:'',broadcastDays:'',likes:'',photo:'/assets/profile-sample.webp'};
 async function init(){
  await pool.query(`CREATE TABLE IF NOT EXISTS site_profile (id INTEGER PRIMARY KEY DEFAULT 1 CHECK(id=1), data JSONB NOT NULL)`);
+ await pool.query(`CREATE TABLE IF NOT EXISTS reputation_settings (id INTEGER PRIMARY KEY DEFAULT 1 CHECK(id=1), avatar TEXT NOT NULL DEFAULT '')`);
+ await pool.query("INSERT INTO reputation_settings(id,avatar) VALUES(1,'') ON CONFLICT(id) DO NOTHING");
  await pool.query(`CREATE TABLE IF NOT EXISTS weekly_schedule (date DATE PRIMARY KEY, category TEXT NOT NULL, title TEXT NOT NULL, time_text TEXT NOT NULL, detail TEXT NOT NULL DEFAULT '')`);
  await pool.query(`CREATE TABLE IF NOT EXISTS site_entries (id BIGSERIAL PRIMARY KEY, section TEXT NOT NULL CHECK(section IN ('notice','outfit','reputation')), title TEXT NOT NULL, body TEXT NOT NULL DEFAULT '', image TEXT NOT NULL DEFAULT '', created_at TIMESTAMPTZ NOT NULL DEFAULT now())`);
  await pool.query("ALTER TABLE site_entries ADD COLUMN IF NOT EXISTS outfit_type TEXT NOT NULL DEFAULT '의상'");
@@ -114,6 +116,8 @@ function repKey(v){return String(v||'').trim().replace(/\s+/g,' ').toLocaleLower
 function repViewer(r){return r.viewer_id?.trim()?'id:'+r.viewer_id.trim().toLocaleLowerCase():'name:'+repKey(r.name)}
 function repParse(r){const raw=String(r.description||'').trim();if(!raw)return [{label:'업보 미등록',qty:Math.max(0,r.count)}];const chunks=raw.split(/[,，\n]+/).map(s=>s.trim()).filter(Boolean);if(chunks.length===1&&!/[＊*]\s*\d+\s*$/.test(raw))return [{label:raw,qty:r.count}];return chunks.map(chunk=>{const m=chunk.match(/^(.*?)[＊*]\s*(\d+)\s*$/);return m&&m[1].trim()?{label:m[1].trim(),qty:Number(m[2])}:{label:chunk,qty:1}})}
 const repSelect='SELECT id::text,name,viewer_id,description,count,image,created_at FROM reputation_records';
+app.get('/api/reputation/avatar',async(req,res)=>{try{const r=await pool.query('SELECT avatar FROM reputation_settings WHERE id=1');res.setHeader('Cache-Control','no-store');res.json({avatar:r.rows[0]?.avatar||''})}catch(e){err(res,e)}});
+app.put('/api/reputation/avatar',auth,async(req,res)=>{try{const avatar=imageVal(req.body?.avatar);await pool.query('INSERT INTO reputation_settings(id,avatar) VALUES(1,$1) ON CONFLICT(id) DO UPDATE SET avatar=EXCLUDED.avatar',[avatar]);notifyUpdate({kind:'reputation'});res.json({ok:true})}catch(e){res.status(400).json({error:e.message})}});
 app.get('/api/reputation',async(req,res)=>{try{const [items,progress]=await Promise.all([pool.query(repSelect+' ORDER BY created_at ASC,id ASC'),pool.query('SELECT viewer_key,prize_key,completed,public_note FROM reputation_progress')]);res.setHeader('Cache-Control','no-store');res.json({items:items.rows,progress:progress.rows})}catch(e){err(res,e)}});
 app.get('/api/reputation/private',auth,async(req,res)=>{try{const r=await pool.query('SELECT viewer_key,prize_key,private_note FROM reputation_progress');res.setHeader('Cache-Control','no-store');res.json({notes:r.rows})}catch(e){err(res,e)}});
 function repValidate(b){const name=str(b.name,100),viewerId=str(b.viewerId,100),description=str(b.description,10000),count=Number(b.count),image=imageVal(b.image);if(!name||!Number.isSafeInteger(count)||count<0||count>999999)return null;return {name,viewerId,description,count,image}}
