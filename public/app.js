@@ -11,6 +11,9 @@ async function api(url,opts={}){const r=await fetch(url,{credentials:'same-origi
 let refreshInFlight=null;
 let refreshQueued=false;
 let localWritePending=0;
+// SSE carries the saved record, so do not reload the entire database on every edit.
+let refreshStartedAt=0;
+let lastLiveChangeAt=0;
 function applyChange(change){
  if(!change||typeof change!=='object')return false;
  if(change.kind==='profile'&&change.profile){state.profile=change.profile;renderProfile();return true}
@@ -30,7 +33,11 @@ function applyChange(change){
 async function refresh(){
  if(refreshInFlight){refreshQueued=true;return refreshInFlight}
  refreshInFlight=(async()=>{
+  const started=Date.now();
+  refreshStartedAt=started;
   const data=await api('/api/state',{cache:'no-store'});
+  // An SSE change received while this request was running is newer than its snapshot.
+  if(lastLiveChangeAt>started){refreshQueued=true;return}
   Object.assign(state,data);document.body.classList.toggle('is-admin',state.admin);render();
  })();
  try{await refreshInFlight}finally{
@@ -39,16 +46,27 @@ async function refresh(){
  }
 }
 let updateTimer;
-function scheduleRefresh(){clearTimeout(updateTimer);updateTimer=setTimeout(()=>refresh().catch(e=>console.warn('자동 갱신 실패:',e)),150)}
+function scheduleRefresh(){clearTimeout(updateTimer);updateTimer=setTimeout(()=>refresh().catch(e=>console.warn('자동 갱신 실패:',e)),100)}
 if(typeof EventSource!=='undefined'){
  const live=new EventSource('/api/events');
+ let openedOnce=false;
  live.addEventListener('update',event=>{
-  try{const change=JSON.parse(event.data);if(refreshInFlight||localWritePending){scheduleRefresh();return}if(!applyChange(change))scheduleRefresh()}
-  catch{scheduleRefresh()}
+  try{
+   const change=JSON.parse(event.data);
+   lastLiveChangeAt=Date.now();
+   // Apply the event immediately, including while this tab is saving.
+   // The old code did a costly full /api/state reload for every local edit.
+   if(!applyChange(change))scheduleRefresh();
+  }catch(e){console.warn('실시간 이벤트 처리 실패:',e);scheduleRefresh()}
  });
- live.addEventListener('open',scheduleRefresh);
+ live.addEventListener('open',()=>{
+  // Only re-sync on reconnection, not on the initial SSE connection.
+  if(openedOnce)scheduleRefresh();
+  openedOnce=true;
+ });
 }
-setInterval(()=>{if(!document.hidden)scheduleRefresh()},15000);
+// Safety net for missed events; SSE itself updates the UI without polling.
+setInterval(()=>{if(!document.hidden)scheduleRefresh()},60000);
 document.addEventListener('visibilitychange',()=>{if(!document.hidden)scheduleRefresh()});
 async function saveChange(url,opts,changeFromResult){
  localWritePending++;
@@ -57,7 +75,7 @@ async function saveChange(url,opts,changeFromResult){
 }
 
 function render(){renderProfile();renderWeek();renderMonth();renderEntries()}
-function renderProfile(){const p=state.profile;$('#profileName').textContent=p.name||'챠릴';$('#profileSubtitle').textContent=p.subtitle||'Charil';const defaultPhoto='/assets/profile-sample.webp';const photo=p.photo||defaultPhoto;$('#portrait').src=photo;$('#portrait').closest('.portrait-panel').classList.toggle('default-portrait',photo===defaultPhoto);for(const el of document.querySelectorAll('[data-profile]'))el.textContent=p[el.dataset.profile]||''}
+function renderProfile(){const p=state.profile;$('#profileName').textContent=p.name||'챠릴';$('#profileSubtitle').textContent=p.subtitle||'Charil';const defaultPhoto='/assets/profile-sample.webp';const photo=p.photo||defaultPhoto;if($('#portrait').getAttribute('src')!==photo)$('#portrait').src=photo;$('#portrait').closest('.portrait-panel').classList.toggle('default-portrait',photo===defaultPhoto);for(const el of document.querySelectorAll('[data-profile]'))el.textContent=p[el.dataset.profile]||''}
 function scheduleFor(d){return state.schedule.find(s=>s.date===dateKey(d))}
 function weekRow(d,i){const s=scheduleFor(d);const row=document.createElement('div');row.className='week-row'+(i===6?' sunday':'')+(!s?' empty':'');const day=document.createElement('span');day.className='day';day.textContent=weekdays[i];const date=document.createElement('span');date.className='date';date.textContent=dateShort(d);const title=document.createElement('span');title.className='activity';title.textContent=s?`${icon(s.category)} ${s.title||s.category}`:'—';const time=document.createElement('span');time.className='time';time.textContent=s?.time||'';row.append(day,date,title,time);row.title=s?.detail||'';return row}
 function icon(cat){return {방송:'◉',게임:'♧',소통:'▤',휴방:'☕',기타:'☆'}[cat]||'☆'}
