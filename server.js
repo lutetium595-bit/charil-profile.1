@@ -97,7 +97,57 @@ function sendSnapshot(req,res,data){
  }
  return res.send(json);
 }
-app.get('/api/state',async(req,res)=>{try{const [p,s,e,session]=await Promise.all([pool.query('SELECT data FROM site_profile WHERE id=1'),pool.query("SELECT to_char(date,'YYYY-MM-DD') AS date,category,title,time_text AS time,detail FROM weekly_schedule ORDER BY date"),pool.query('SELECT id::text,section,title,body,image,outfit_type,created_at FROM site_entries ORDER BY created_at DESC,id DESC'),current(req)]);res.setHeader('Cache-Control','no-store');sendSnapshot(req,res,{profile:p.rows[0]?.data||defaultProfile,schedule:s.rows,entries:e.rows,admin:!!session})}catch(e){err(res,e)}});
+// Serve stored images independently, without changing or migrating existing database records.
+const DATA_IMAGE=/^data:image\/(png|jpeg|webp|gif);base64,([A-Za-z0-9+/=]+)$/;
+function imageUrl(value,route){
+ if(!value||!DATA_IMAGE.test(value))return value||'';
+ return route+'?v='+crypto.createHash('sha256').update(value).digest('hex').slice(0,24);
+}
+function publicProfile(profile){const p={...profile};p.photo=imageUrl(p.photo,'/api/media/profile');return p}
+function publicEntry(entry){return {...entry,image:imageUrl(entry.image,'/api/media/entry/'+entry.id)}}
+function sendImage(res,value){
+ const m=DATA_IMAGE.exec(value||'');if(!m)return res.status(404).end();
+ const bytes=Buffer.from(m[2],'base64');
+ res.setHeader('Content-Type','image/'+m[1]);
+ res.setHeader('Cache-Control','public, max-age=31536000, immutable');
+ res.setHeader('X-Content-Type-Options','nosniff');
+ return res.send(bytes);
+}
+app.get('/api/media/profile',async(req,res)=>{try{
+ const r=await pool.query("SELECT data->>'photo' AS image FROM site_profile WHERE id=1");
+ const v=r.rows[0]?.image||'';
+ if(req.query.v!==crypto.createHash('sha256').update(v).digest('hex').slice(0,24))return res.status(404).end();
+ sendImage(res,v);
+}catch(e){err(res,e)}});
+app.get('/api/media/entry/:id',async(req,res)=>{try{
+ if(!/^\d+$/.test(req.params.id))return res.status(404).end();
+ const r=await pool.query('SELECT image FROM site_entries WHERE id=$1',[req.params.id]);
+ const v=r.rows[0]?.image||'';
+ if(req.query.v!==crypto.createHash('sha256').update(v).digest('hex').slice(0,24))return res.status(404).end();
+ sendImage(res,v);
+}catch(e){err(res,e)}});
+// When editing an unchanged image, the browser submits its lightweight URL.
+// Resolve that URL to the existing database value so saving never destroys images.
+async function profileImageInput(value){
+ if(typeof value==='string'&&value.startsWith('/api/media/profile?v=')){
+  const r=await pool.query("SELECT data->>'photo' AS image FROM site_profile WHERE id=1");
+  const existing=r.rows[0]?.image||'';
+  if(value!==imageUrl(existing,'/api/media/profile'))throw new Error('사진이 변경되었습니다. 새로고침 후 다시 저장해 주세요.');
+  return existing;
+ }
+ return imageVal(value,14000000);
+}
+async function entryImageInput(value,id){
+ if(typeof value==='string'&&value.startsWith('/api/media/entry/')){
+  if(!id)throw new Error('사진 정보가 올바르지 않습니다.');
+  const r=await pool.query('SELECT image FROM site_entries WHERE id=$1',[id]);
+  const existing=r.rows[0]?.image||'';
+  if(value!==imageUrl(existing,'/api/media/entry/'+id))throw new Error('사진이 변경되었습니다. 새로고침 후 다시 저장해 주세요.');
+  return existing;
+ }
+ return imageVal(value,14000000);
+}
+app.get('/api/state',async(req,res)=>{try{const [p,s,e,session]=await Promise.all([pool.query('SELECT data FROM site_profile WHERE id=1'),pool.query("SELECT to_char(date,'YYYY-MM-DD') AS date,category,title,time_text AS time,detail FROM weekly_schedule ORDER BY date"),pool.query('SELECT id::text,section,title,body,image,outfit_type,created_at FROM site_entries ORDER BY created_at DESC,id DESC'),current(req)]);res.setHeader('Cache-Control','no-store');sendSnapshot(req,res,{profile:publicProfile(p.rows[0]?.data||defaultProfile),schedule:s.rows,entries:e.rows.map(publicEntry),admin:!!session})}catch(e){err(res,e)}});
 app.get('/api/session',async(req,res)=>{try{res.setHeader('Cache-Control','no-store');res.json({admin:!!(await current(req))})}catch(e){err(res,e)}});
 app.post('/api/login',async(req,res)=>{try{
  const ip=req.ip;const record=failures.get(ip)||{n:0,until:0};
@@ -120,11 +170,11 @@ app.post('/api/logout',auth,async(req,res)=>{try{
 }catch(e){err(res,e)}});
 function str(x,max=200){return typeof x==='string'?x.trim().slice(0,max):''}
 function imageVal(x,maxChars=3500000){const s=str(x,maxChars);if(!s||s==='/assets/profile-sample.webp')return s;if(/^data:image\/(png|jpeg|webp|gif);base64,[A-Za-z0-9+/=]+$/.test(s)&&s.length<=maxChars)return s;throw new Error('지원하지 않는 이미지 형식입니다.')}
-app.put('/api/profile',auth,async(req,res)=>{try{const b=req.body||{};const p={name:str(b.name,40),subtitle:str(b.subtitle,80),birthday:str(b.birthday,80),firstBroadcast:str(b.firstBroadcast,100),mbti:str(b.mbti,50),fixedTime:str(b.fixedTime,80),broadcastDays:str(b.broadcastDays,140),likes:str(b.likes,300),photo:imageVal(b.photo,14000000)};await pool.query('UPDATE site_profile SET data=$1 WHERE id=1',[JSON.stringify(p)]);notifyUpdate({kind:'profile',profile:p});res.json({profile:p})}catch(e){res.status(400).json({error:e.message})}});
+app.put('/api/profile',auth,async(req,res)=>{try{const b=req.body||{};const p={name:str(b.name,40),subtitle:str(b.subtitle,80),birthday:str(b.birthday,80),firstBroadcast:str(b.firstBroadcast,100),mbti:str(b.mbti,50),fixedTime:str(b.fixedTime,80),broadcastDays:str(b.broadcastDays,140),likes:str(b.likes,300),photo:await profileImageInput(b.photo)};await pool.query('UPDATE site_profile SET data=$1 WHERE id=1',[JSON.stringify(p)]);notifyUpdate({kind:'profile',profile:publicProfile(p)});res.json({profile:publicProfile(p)})}catch(e){res.status(400).json({error:e.message})}});
 app.put('/api/schedule/:date',auth,async(req,res)=>{try{const d=req.params.date;if(!/^\d{4}-\d{2}-\d{2}$/.test(d)||Number.isNaN(Date.parse(d)))return res.status(400).json({error:'날짜 형식이 올바르지 않습니다.'});const category=str(req.body.category,30),title=str(req.body.title,100),time=str(req.body.time,70),detail=str(req.body.detail,500);if(!['방송','게임','소통','휴방','기타'].includes(category))return res.status(400).json({error:'카테고리를 확인해 주세요.'});await pool.query(`INSERT INTO weekly_schedule(date,category,title,time_text,detail) VALUES($1,$2,$3,$4,$5) ON CONFLICT(date) DO UPDATE SET category=$2,title=$3,time_text=$4,detail=$5`,[d,category,title,time,detail]);notifyUpdate({kind:'schedule',date:d,item:{date:d,category,title,time,detail}});res.json({ok:true,item:{date:d,category,title,time,detail}})}catch(e){err(res,e)}});
 app.delete('/api/schedule/:date',auth,async(req,res)=>{try{await pool.query('DELETE FROM weekly_schedule WHERE date=$1',[req.params.date]);notifyUpdate({kind:'schedule',date:req.params.date,item:null});res.json({ok:true,date:req.params.date})}catch(e){err(res,e)}});
-app.post('/api/entries',auth,async(req,res)=>{try{const section=str(req.body.section,30),title=str(req.body.title,150),body=str(req.body.body,5000),image=imageVal(req.body.image,14000000),outfitType=str(req.body.outfit_type,10)||'의상';if(section==='outfit'&&!['의상','헤어'].includes(outfitType))return res.status(400).json({error:'분류를 확인해 주세요.'});if(!['notice','outfit','reputation'].includes(section)||!title)return res.status(400).json({error:'제목과 종류를 확인해 주세요.'});const r=await pool.query('INSERT INTO site_entries(section,title,body,image,outfit_type) VALUES($1,$2,$3,$4,$5) RETURNING id::text,section,title,body,image,outfit_type,created_at',[section,title,body,image,section==='outfit'?outfitType:'의상']);notifyUpdate({kind:'entry',item:r.rows[0]});res.json({id:r.rows[0].id,item:r.rows[0]})}catch(e){res.status(400).json({error:e.message})}});
-app.put('/api/entries/:id',auth,async(req,res)=>{try{const title=str(req.body.title,150),body=str(req.body.body,5000),image=imageVal(req.body.image,14000000),outfitType=str(req.body.outfit_type,10)||'의상';if(!['의상','헤어'].includes(outfitType))return res.status(400).json({error:'분류를 확인해 주세요.'});if(!/^\d+$/.test(req.params.id)||!title)return res.status(400).json({error:'항목을 확인해 주세요.'});const r=await pool.query(`UPDATE site_entries SET title=$1,body=$2,image=$3,outfit_type=CASE WHEN section='outfit' THEN $5 ELSE outfit_type END WHERE id=$4 RETURNING id::text,section,title,body,image,outfit_type,created_at`,[title,body,image,req.params.id,outfitType]);if(r.rowCount)notifyUpdate({kind:'entry',item:r.rows[0]});res.status(r.rowCount?200:404).json(r.rowCount?{ok:true,item:r.rows[0]}:{error:'항목을 찾지 못했습니다.'})}catch(e){res.status(400).json({error:e.message})}});
+app.post('/api/entries',auth,async(req,res)=>{try{const section=str(req.body.section,30),title=str(req.body.title,150),body=str(req.body.body,5000),image=await entryImageInput(req.body.image),outfitType=str(req.body.outfit_type,10)||'의상';if(section==='outfit'&&!['의상','헤어'].includes(outfitType))return res.status(400).json({error:'분류를 확인해 주세요.'});if(!['notice','outfit','reputation'].includes(section)||!title)return res.status(400).json({error:'제목과 종류를 확인해 주세요.'});const r=await pool.query('INSERT INTO site_entries(section,title,body,image,outfit_type) VALUES($1,$2,$3,$4,$5) RETURNING id::text,section,title,body,image,outfit_type,created_at',[section,title,body,image,section==='outfit'?outfitType:'의상']);notifyUpdate({kind:'entry',item:publicEntry(r.rows[0])});res.json({id:r.rows[0].id,item:publicEntry(r.rows[0])})}catch(e){res.status(400).json({error:e.message})}});
+app.put('/api/entries/:id',auth,async(req,res)=>{try{const title=str(req.body.title,150),body=str(req.body.body,5000),image=await entryImageInput(req.body.image,req.params.id),outfitType=str(req.body.outfit_type,10)||'의상';if(!['의상','헤어'].includes(outfitType))return res.status(400).json({error:'분류를 확인해 주세요.'});if(!/^\d+$/.test(req.params.id)||!title)return res.status(400).json({error:'항목을 확인해 주세요.'});const r=await pool.query(`UPDATE site_entries SET title=$1,body=$2,image=$3,outfit_type=CASE WHEN section='outfit' THEN $5 ELSE outfit_type END WHERE id=$4 RETURNING id::text,section,title,body,image,outfit_type,created_at`,[title,body,image,req.params.id,outfitType]);if(r.rowCount)notifyUpdate({kind:'entry',item:publicEntry(r.rows[0])});res.status(r.rowCount?200:404).json(r.rowCount?{ok:true,item:publicEntry(r.rows[0])}:{error:'항목을 찾지 못했습니다.'})}catch(e){res.status(400).json({error:e.message})}});
 app.delete('/api/entries/:id',auth,async(req,res)=>{try{if(!/^\d+$/.test(req.params.id))return res.status(400).json({error:'잘못된 ID'});await pool.query('DELETE FROM site_entries WHERE id=$1',[req.params.id]);notifyUpdate({kind:'entry',id:req.params.id,item:null});res.json({ok:true,id:req.params.id})}catch(e){err(res,e)}});
 
 // Reputation dashboard, based on the separate roulette site's viewer/prize model.
