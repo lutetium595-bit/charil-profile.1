@@ -68,8 +68,8 @@ if(typeof EventSource!=='undefined'){
  });
 }
 // Safety net for missed events; SSE itself updates the UI without polling.
-setInterval(()=>{if(!document.hidden)scheduleRefresh()},60000);
-document.addEventListener('visibilitychange',()=>{if(!document.hidden)scheduleRefresh()});
+setInterval(()=>{if(!document.hidden)scheduleRefresh()},300000);
+document.addEventListener('visibilitychange',()=>{if(!document.hidden&&Date.now()-refreshStartedAt>60000)scheduleRefresh()});
 async function saveChange(url,opts,changeFromResult){
  localWritePending++;
  try{const result=await api(url,opts);const change=changeFromResult(result);if(!applyChange(change))await refresh();return result}

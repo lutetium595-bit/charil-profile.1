@@ -2,6 +2,7 @@
 const express=require('express');
 const {Pool}=require('pg');
 const crypto=require('crypto');
+const zlib=require('zlib');
 const path=require('path');
 const app=express();
 const {DATABASE_URL,ADMIN_PASSWORD,SESSION_SECRET}=process.env;
@@ -81,7 +82,22 @@ async function init(){
  if(migration.rowCount)await pool.query(`INSERT INTO reputation_records(legacy_id,name,description,image,created_at) SELECT id,title,body,image,created_at FROM site_entries WHERE section='reputation' ON CONFLICT(legacy_id) DO NOTHING`);
  await pool.query('INSERT INTO site_profile (id,data) VALUES (1,$1) ON CONFLICT(id) DO NOTHING',[JSON.stringify(defaultProfile)]);
 }
-app.get('/api/state',async(req,res)=>{try{const [p,s,e,session]=await Promise.all([pool.query('SELECT data FROM site_profile WHERE id=1'),pool.query("SELECT to_char(date,'YYYY-MM-DD') AS date,category,title,time_text AS time,detail FROM weekly_schedule ORDER BY date"),pool.query('SELECT id::text,section,title,body,image,outfit_type,created_at FROM site_entries ORDER BY created_at DESC,id DESC'),current(req)]);res.setHeader('Cache-Control','no-store');res.json({profile:p.rows[0]?.data||defaultProfile,schedule:s.rows,entries:e.rows,admin:!!session})}catch(e){err(res,e)}});
+// Compress large JSON snapshots using Node's built-in gzip support.
+// Keep the response schema unchanged so existing browsers and admin tools work.
+function sendSnapshot(req,res,data){
+ const json=JSON.stringify(data);
+ res.setHeader('Vary','Accept-Encoding');
+ res.type('json');
+ if(/(?:^|,)\s*gzip(?:\s*;|\s*,|\s*$)/i.test(req.headers['accept-encoding']||'') && Buffer.byteLength(json)>1024){
+  res.setHeader('Content-Encoding','gzip');
+  return zlib.gzip(Buffer.from(json),{level:zlib.constants.Z_BEST_SPEED},(error,compressed)=>{
+   if(error){res.removeHeader('Content-Encoding');return res.send(json)}
+   res.send(compressed);
+  });
+ }
+ return res.send(json);
+}
+app.get('/api/state',async(req,res)=>{try{const [p,s,e,session]=await Promise.all([pool.query('SELECT data FROM site_profile WHERE id=1'),pool.query("SELECT to_char(date,'YYYY-MM-DD') AS date,category,title,time_text AS time,detail FROM weekly_schedule ORDER BY date"),pool.query('SELECT id::text,section,title,body,image,outfit_type,created_at FROM site_entries ORDER BY created_at DESC,id DESC'),current(req)]);res.setHeader('Cache-Control','no-store');sendSnapshot(req,res,{profile:p.rows[0]?.data||defaultProfile,schedule:s.rows,entries:e.rows,admin:!!session})}catch(e){err(res,e)}});
 app.get('/api/session',async(req,res)=>{try{res.setHeader('Cache-Control','no-store');res.json({admin:!!(await current(req))})}catch(e){err(res,e)}});
 app.post('/api/login',async(req,res)=>{try{
  const ip=req.ip;const record=failures.get(ip)||{n:0,until:0};
@@ -116,7 +132,7 @@ function repKey(v){return String(v||'').trim().replace(/\s+/g,' ').toLocaleLower
 function repViewer(r){return r.viewer_id?.trim()?'id:'+r.viewer_id.trim().toLocaleLowerCase():'name:'+repKey(r.name)}
 function repParse(r){const raw=String(r.description||'').trim();if(!raw)return [{label:'업보 미등록',qty:Math.max(0,r.count)}];const chunks=raw.split(/[,，\n]+/).map(s=>s.trim()).filter(Boolean);if(chunks.length===1&&!/[＊*]\s*\d+\s*$/.test(raw))return [{label:raw,qty:r.count}];return chunks.map(chunk=>{const m=chunk.match(/^(.*?)[＊*]\s*(\d+)\s*$/);return m&&m[1].trim()?{label:m[1].trim(),qty:Number(m[2])}:{label:chunk,qty:1}})}
 const repSelect='SELECT id::text,name,viewer_id,description,count,image,created_at FROM reputation_records';
-app.get('/api/reputation/avatar',async(req,res)=>{try{const r=await pool.query('SELECT avatar FROM reputation_settings WHERE id=1');res.setHeader('Cache-Control','no-store');res.json({avatar:r.rows[0]?.avatar||''})}catch(e){err(res,e)}});
+app.get('/api/reputation/avatar',async(req,res)=>{try{const r=await pool.query('SELECT avatar FROM reputation_settings WHERE id=1');res.setHeader('Cache-Control','no-store');sendSnapshot(req,res,{avatar:r.rows[0]?.avatar||''})}catch(e){err(res,e)}});
 app.put('/api/reputation/avatar',auth,async(req,res)=>{try{const avatar=imageVal(req.body?.avatar);await pool.query('INSERT INTO reputation_settings(id,avatar) VALUES(1,$1) ON CONFLICT(id) DO UPDATE SET avatar=EXCLUDED.avatar',[avatar]);notifyUpdate({kind:'reputation'});res.json({ok:true})}catch(e){res.status(400).json({error:e.message})}});
 app.get('/api/reputation',async(req,res)=>{try{const [items,progress]=await Promise.all([pool.query(repSelect+' ORDER BY created_at ASC,id ASC'),pool.query('SELECT viewer_key,prize_key,completed,public_note FROM reputation_progress')]);res.setHeader('Cache-Control','no-store');res.json({items:items.rows,progress:progress.rows})}catch(e){err(res,e)}});
 app.get('/api/reputation/private',auth,async(req,res)=>{try{const r=await pool.query('SELECT viewer_key,prize_key,private_note FROM reputation_progress');res.setHeader('Cache-Control','no-store');res.json({notes:r.rows})}catch(e){err(res,e)}});
