@@ -23,3 +23,5 @@
 @media(max-width:700px){.rep-card{grid-template-columns:1fr}.rep-identity{border-right:0;border-bottom:1px solid #e0edff;padding:15px}.rep-content{padding:15px}.rep-avatar{width:48px;height:48px}}
 
 .rep-header-actions{display:flex;gap:9px;align-items:center;flex-wrap:wrap}.rep-header-actions .add-btn{white-space:nowrap}
+
+.month-day{height:auto;overflow:visible}.month-event{flex-shrink:0}.calendar-event-list{display:grid;gap:12px}.calendar-event-detail{background:#fff;border:1px solid #d0e2fb;border-radius:14px;padding:14px;color:#194b8c}.calendar-event-detail strong{display:inline-block;background:#dcecff;border-radius:8px;padding:5px 9px}.calendar-event-detail h3{margin:10px 0 5px;font-size:19px}.calendar-event-detail p{margin:6px 0;white-space:pre-wrap;overflow-wrap:anywhere}.calendar-event-detail .small-action{margin-top:8px}
